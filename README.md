@@ -1,19 +1,26 @@
 # Embeddings Java SQLite
 
-API REST em Java para armazenar mensagens e realizar busca semântica com embeddings locais. O projeto usa [Javalin](https://javalin.io/) para a API, [LangChain4j](https://docs.langchain4j.dev/) com o modelo All-MiniLM-L6-v2 para gerar embeddings e SQLite para persistência.
+API REST em Spring Boot para armazenar mensagens e realizar busca semântica com embeddings locais. O projeto usa Spring Web, Spring JDBC, [LangChain4j](https://docs.langchain4j.dev/), o modelo multilíngue `paraphrase-multilingual-MiniLM-L12-v2` e SQLite.
 
 ## Requisitos
 
 - Java 17 ou mais recente
-- [JBang](https://www.jbang.dev/)
+- O Gradle Wrapper incluído no projeto
 
 ## Como executar
 
 ```bash
-jbang UserMessageRagApi.java
+./gradlew bootRun
 ```
 
 A aplicação inicia em `http://localhost:8080`. O arquivo `user_messages.db` é criado automaticamente no diretório atual.
+
+Na primeira execução, a aplicação baixa aproximadamente 135 MB do modelo ONNX quantizado e do tokenizer para `.models/`. Nas execuções seguintes, os arquivos são reutilizados e seus checksums são verificados.
+
+A documentação interativa é gerada automaticamente e fica disponível em:
+
+- Swagger UI: `http://localhost:8080/swagger-ui.html`
+- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
 
 ## Endpoints
 
@@ -51,10 +58,51 @@ curl 'http://localhost:8080/api/messages/search?query=programa%C3%A7%C3%A3o%20em
 curl -X DELETE http://localhost:8080/api/messages/ID_DA_MENSAGEM
 ```
 
+### Reindexar mensagens antigas
+
+Ao trocar o modelo de embeddings, recrie os vetores já armazenados:
+
+```bash
+curl -X POST http://localhost:8080/api/messages/reindex
+```
+
+Mensagens ainda não reindexadas continuam disponíveis na listagem, mas são ignoradas nas buscas semânticas para evitar a comparação de vetores produzidos por modelos diferentes.
+
 O parâmetro opcional `limit` aceita valores entre 1 e 100 e usa 20 por padrão.
 
 ## Como funciona
 
 Ao receber uma mensagem, a aplicação gera um vetor de embedding e o armazena como um BLOB no SQLite. Nas buscas, ela gera o embedding do texto consultado e ordena as mensagens pela similaridade de cosseno.
 
+As respostas expõem `vectorDimensions` para informar o tamanho do embedding sem transferir o vetor completo. O modelo atual produz vetores com 384 dimensões.
+
 Todo o processamento de embeddings acontece localmente, sem necessidade de chave de API.
+
+## Testes e build
+
+```bash
+./gradlew test
+./gradlew integrationTest
+./gradlew bootJar
+java -jar build/libs/embeddings-java-sqlite-0.0.1-SNAPSHOT.jar
+```
+
+Os testes de integração sobem a aplicação em uma porta aleatória, usam um banco SQLite temporário e fazem requisições HTTP reais com o modelo multilíngue carregado. O comando `./gradlew check` executa tanto os testes unitários quanto os testes de integração.
+
+Durante os testes de integração, o terminal mostra cada request e response HTTP, incluindo método, URL, payload, status e duração. Ao final de cada caso, o Gradle informa `PASSED`, `FAILED` ou `SKIPPED`.
+
+### Relatório Allure
+
+Para executar os testes e gerar um relatório HTML navegável:
+
+```bash
+./gradlew allureReport --depends-on-tests
+```
+
+Para gerar e abrir o relatório no navegador:
+
+```bash
+./gradlew allureServe
+```
+
+O relatório contém o status e a duração de cada teste, histórico de falhas e anexos com os requests e responses HTTP completos.

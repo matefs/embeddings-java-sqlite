@@ -8,9 +8,11 @@
 target/
 build/
 .gradle/
+.models/
 
 # IDEs e sistema operacional
 .idea/
 .vscode/
 *.iml
 .DS_Store
+ajcore.*.txt
