@@ -17,10 +17,23 @@ A aplicação inicia em `http://localhost:8080`. O arquivo `user_messages.db` é
 
 Na primeira execução, a aplicação baixa aproximadamente 135 MB do modelo ONNX quantizado e do tokenizer para `.models/`. Nas execuções seguintes, os arquivos são reutilizados e seus checksums são verificados.
 
-A documentação interativa é gerada automaticamente e fica disponível em:
+## Swagger e OpenAPI
 
-- Swagger UI: `http://localhost:8080/swagger-ui.html`
-- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
+A documentação da API é gerada automaticamente pelo Springdoc a partir dos controllers, DTOs e validações do projeto. Com a aplicação em execução, acesse:
+
+- **Swagger UI:** http://localhost:8080/swagger-ui.html
+- **OpenAPI JSON:** http://localhost:8080/v3/api-docs
+- **OpenAPI YAML:** http://localhost:8080/v3/api-docs.yaml
+
+Pelo Swagger UI é possível visualizar os endpoints, parâmetros, payloads, códigos de resposta e schemas. Também é possível executar chamadas reais contra a API:
+
+1. Abra http://localhost:8080/swagger-ui.html.
+2. Escolha um endpoint.
+3. Clique em **Try it out**.
+4. Preencha os parâmetros ou o corpo da requisição.
+5. Clique em **Execute** para conferir o request, status HTTP e response.
+
+O documento OpenAPI inclui operações para criação, listagem, exclusão, busca semântica por usuário, busca semântica global e reindexação dos embeddings. A geração dessa especificação também é validada pelos testes de integração.
 
 ## Endpoints
 
