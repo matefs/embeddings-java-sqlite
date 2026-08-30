@@ -1,0 +1,16 @@
+# Banco de dados e arquivos auxiliares do SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Artefatos Java
+*.class
+target/
+build/
+.gradle/
+
+# IDEs e sistema operacional
+.idea/
+.vscode/
+*.iml
+.DS_Store
