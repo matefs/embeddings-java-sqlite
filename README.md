@@ -1,6 +1,6 @@
 # Embeddings Java SQLite
 
-API REST em Spring Boot para armazenar mensagens e realizar busca semântica com embeddings locais. O projeto usa Spring Web, Spring JDBC, [LangChain4j](https://docs.langchain4j.dev/), o modelo multilíngue `paraphrase-multilingual-MiniLM-L12-v2` e SQLite.
+API REST em Spring Boot para armazenar mensagens e realizar busca vetorial, lexical e híbrida. O projeto usa Spring Web, Spring JDBC, [LangChain4j](https://docs.langchain4j.dev/), o modelo multilíngue `paraphrase-multilingual-MiniLM-L12-v2`, SQLite FTS5, BM25 e Reciprocal Rank Fusion (RRF).
 
 ## Requisitos
 
@@ -33,7 +33,7 @@ Pelo Swagger UI é possível visualizar os endpoints, parâmetros, payloads, có
 4. Preencha os parâmetros ou o corpo da requisição.
 5. Clique em **Execute** para conferir o request, status HTTP e response.
 
-O documento OpenAPI inclui operações para criação, listagem, exclusão, busca semântica por usuário, busca semântica global e reindexação dos embeddings. A geração dessa especificação também é validada pelos testes de integração.
+O documento OpenAPI inclui operações para criação, listagem, exclusão, buscas vetorial, lexical e híbrida, além da reindexação dos embeddings. A geração dessa especificação também é validada pelos testes de integração.
 
 ## Endpoints
 
@@ -65,6 +65,38 @@ curl -X POST 'http://localhost:8080/api/messages/user/usuario-1/search?limit=20'
 curl 'http://localhost:8080/api/messages/search?query=programa%C3%A7%C3%A3o%20em%20Java&limit=20'
 ```
 
+### Busca lexical global com FTS5 e BM25
+
+Indicada para palavras exatas, termos raros, siglas e códigos:
+
+```bash
+curl 'http://localhost:8080/api/messages/search/lexical?query=ERR-XPTO-409&limit=20'
+```
+
+### Busca lexical de um usuário
+
+```bash
+curl -X POST 'http://localhost:8080/api/messages/user/usuario-1/search/lexical?limit=20' \
+  -H 'Content-Type: text/plain; charset=UTF-8' \
+  --data 'ERR-XPTO-409'
+```
+
+### Busca híbrida global
+
+Combina o ranking vetorial com o ranking FTS5/BM25 usando RRF:
+
+```bash
+curl 'http://localhost:8080/api/messages/search/hybrid?query=falha%20no%20pedido%20ERR-XPTO-409&limit=20'
+```
+
+### Busca híbrida de um usuário
+
+```bash
+curl -X POST 'http://localhost:8080/api/messages/user/usuario-1/search/hybrid?limit=20' \
+  -H 'Content-Type: text/plain; charset=UTF-8' \
+  --data 'falha no pedido ERR-XPTO-409'
+```
+
 ### Excluir uma mensagem
 
 ```bash
@@ -85,7 +117,15 @@ O parâmetro opcional `limit` aceita valores entre 1 e 100 e usa 20 por padrão.
 
 ## Como funciona
 
-Ao receber uma mensagem, a aplicação gera um vetor de embedding e o armazena como um BLOB no SQLite. Nas buscas, ela gera o embedding do texto consultado e ordena as mensagens pela similaridade de cosseno.
+Ao receber uma mensagem, a aplicação gera um vetor de embedding, armazena-o como BLOB e mantém o texto sincronizado em uma tabela virtual FTS5 por meio de triggers do SQLite.
+
+Existem três estratégias de recuperação:
+
+- **Vetorial:** compara os embeddings pela similaridade de cosseno; quanto maior o `similarityScore`, melhor.
+- **Lexical:** usa SQLite FTS5 e BM25 para correspondências textuais; no valor bruto retornado pelo SQLite, scores BM25 menores são melhores. O campo `lexicalRank` torna a ordem explícita.
+- **Híbrida:** combina as posições dos dois rankings com `1 / (60 + rank)` para cada fonte. Quanto maior o `rrfScore`, melhor. Os campos `vectorRank` e `lexicalRank` mostram como cada fonte contribuiu.
+
+O RRF usa posições, e não tenta somar diretamente similaridade de cosseno e BM25, pois essas métricas possuem escalas diferentes.
 
 As respostas expõem `vectorDimensions` para informar o tamanho do embedding sem transferir o vetor completo. O modelo atual produz vetores com 384 dimensões.
 

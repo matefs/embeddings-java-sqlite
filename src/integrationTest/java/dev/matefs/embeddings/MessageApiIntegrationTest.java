@@ -2,7 +2,9 @@ package dev.matefs.embeddings;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.qameta.allure.Allure;
+import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -58,6 +60,12 @@ class MessageApiIntegrationTest {
     @Test
     @Order(1)
     @DisplayName("Cria mensagens e embeddings pela API HTTP")
+    @Feature("Criação de mensagens")
+    @Description("""
+            Envia três requests POST /api/messages contra o servidor Spring Boot real.
+            Valida HTTP 201, geração de messageId, preservação de userId e messageText e
+            geração de um embedding com exatamente 384 dimensões.
+            """)
     void createsMessagesThroughRealHttpApi() {
         JsonNode vehicle = createMessage("usuario-portugues", "Quero comprar um carro novo");
         createMessage("usuario-portugues", "Estou estudando desenvolvimento de software em Java");
@@ -74,6 +82,12 @@ class MessageApiIntegrationTest {
     @Test
     @Order(2)
     @DisplayName("Lista somente mensagens do usuário solicitado")
+    @Feature("Consulta por usuário")
+    @Description("""
+            Chama GET /api/messages/user/usuario-portugues?limit=20 depois de criar mensagens
+            para dois usuários diferentes. O teste passa somente se a resposta for HTTP 200,
+            contiver exatamente duas mensagens e nenhuma pertencer ao outro usuário.
+            """)
     void listsOnlyMessagesFromRequestedUser() {
         ResponseEntity<JsonNode> response = http.getForEntity(
                 url("/api/messages/user/usuario-portugues?limit=20"),
@@ -91,6 +105,12 @@ class MessageApiIntegrationTest {
     @Test
     @Order(3)
     @DisplayName("Executa busca semântica em português por usuário")
+    @Feature("Busca semântica por usuário")
+    @Description("""
+            Envia 'aquisição de veículo' para POST /api/messages/user/usuario-portugues/search.
+            Valida que 'Quero comprar um carro novo' seja o primeiro resultado, que seu score
+            seja maior que o segundo e que o embedding informado tenha 384 dimensões.
+            """)
     void performsSemanticSearchInPortugueseForOneUser() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(new MediaType("text", "plain", StandardCharsets.UTF_8));
@@ -118,6 +138,12 @@ class MessageApiIntegrationTest {
     @Test
     @Order(4)
     @DisplayName("Executa busca semântica global")
+    @Feature("Busca semântica global")
+    @Description("""
+            Consulta GET /api/messages/search sem informar userId usando o texto
+            'pagamento recusado no cartão'. Valida que a pesquisa considere todos os usuários
+            e retorne primeiro a mensagem de cobrança cadastrada para 'outro-usuario'.
+            """)
     void performsGlobalSearchIndependentlyOfUser() {
         ResponseEntity<JsonNode> response = http.getForEntity(
                 url("/api/messages/search?query={query}&limit=3"),
@@ -137,7 +163,218 @@ class MessageApiIntegrationTest {
 
     @Test
     @Order(5)
+    @DisplayName("Retorna similaridade alta para textos semanticamente equivalentes")
+    @Feature("Qualidade da similaridade")
+    @Description("""
+            Compara a consulta 'pagamento não autorizado no cartão de crédito' com a mensagem
+            'Minha cobrança no cartão de crédito não foi aprovada'. O teste exige que essa
+            paráfrase seja o primeiro resultado e produza similarityScore maior que 0,75.
+            """)
+    void returnsHighScoreForStrongSemanticMatch() {
+        ResponseEntity<JsonNode> response = http.getForEntity(
+                url("/api/messages/search?query={query}&limit=1"),
+                JsonNode.class,
+                "pagamento não autorizado no cartão de crédito"
+        );
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        JsonNode results = response.getBody();
+        assertThat(results).isNotNull();
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).path("messageText").asText())
+                .isEqualTo("Minha cobrança no cartão de crédito não foi aprovada");
+        assertThat(results.get(0).path("similarityScore").asDouble())
+                .as("uma paráfrase forte deve produzir similaridade alta")
+                .isGreaterThan(0.75);
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("Retorna similaridade baixa para textos sem relação semântica")
+    @Feature("Qualidade da similaridade")
+    @Description("""
+            Pesquisa 'receita de bolo de chocolate com morangos' em uma base contendo apenas
+            mensagens sobre veículo, software e cobrança. O teste passa somente se até o maior
+            similarityScore retornado for menor que 0,35, evitando falso positivo semântico.
+            """)
+    void returnsLowScoreForUnrelatedText() {
+        ResponseEntity<JsonNode> response = http.getForEntity(
+                url("/api/messages/search?query={query}&limit=3"),
+                JsonNode.class,
+                "receita de bolo de chocolate com morangos"
+        );
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        JsonNode results = response.getBody();
+        assertThat(results).isNotNull();
+        assertThat(results).hasSize(3);
+
+        double highestScore = results.get(0).path("similarityScore").asDouble();
+        assertThat(highestScore)
+                .as("um assunto sem relação não deve produzir similaridade alta")
+                .isLessThan(0.35);
+    }
+
+    @Test
+    @Order(7)
+    @DisplayName("Encontra termos exatos e códigos com FTS5 e BM25")
+    @Feature("Busca lexical")
+    @Description("""
+            Cadastra uma mensagem com os códigos raros ERR-XPTO-409 e ABC-12345 e executa as
+            buscas léxicas global e por usuário. Valida que o FTS5 encontre o código exato,
+            coloque a mensagem na primeira posição pelo BM25 e respeite o filtro de userId.
+            """)
+    void findsExactTermsAndCodesWithFts5AndBm25() {
+        createMessage("suporte", "Erro ERR-XPTO-409 ao processar pedido ABC-12345");
+        createMessage("suporte", "Falha genérica ao processar uma solicitação");
+
+        ResponseEntity<JsonNode> globalResponse = http.getForEntity(
+                url("/api/messages/search/lexical?query={query}&limit=5"),
+                JsonNode.class,
+                "ERR-XPTO-409"
+        );
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(new MediaType("text", "plain", StandardCharsets.UTF_8));
+        ResponseEntity<JsonNode> userResponse = http.exchange(
+                url("/api/messages/user/suporte/search/lexical?limit=5"),
+                HttpMethod.POST,
+                new HttpEntity<>("ABC-12345", headers),
+                JsonNode.class
+        );
+
+        assertThat(globalResponse.getStatusCode().value()).isEqualTo(200);
+        assertThat(globalResponse.getBody()).isNotNull();
+        assertThat(globalResponse.getBody().get(0).path("messageText").asText())
+                .contains("ERR-XPTO-409");
+        assertThat(globalResponse.getBody().get(0).path("lexicalRank").asInt()).isEqualTo(1);
+        assertThat(globalResponse.getBody().get(0).path("bm25Score").asDouble()).isNegative();
+
+        assertThat(userResponse.getStatusCode().value()).isEqualTo(200);
+        assertThat(userResponse.getBody()).isNotNull();
+        assertThat(userResponse.getBody().get(0).path("userId").asText()).isEqualTo("suporte");
+        assertThat(userResponse.getBody().get(0).path("messageText").asText())
+                .contains("ABC-12345");
+    }
+
+    @Test
+    @Order(8)
+    @DisplayName("Combina busca vetorial e lexical usando Reciprocal Rank Fusion")
+    @Feature("Busca híbrida")
+    @Description("""
+            Pesquisa uma frase que contém significado semântico e o código ERR-XPTO-409 nos
+            endpoints híbridos global e por usuário. Valida que o resultado correto fique em
+            primeiro, participe dos rankings vetorial e lexical e tenha o score RRF calculado
+            pela soma 1/(60 + vectorRank) + 1/(60 + lexicalRank).
+            """)
+    void combinesVectorAndLexicalSearchWithRrf() {
+        String query = "falha no pedido ERR-XPTO-409";
+        ResponseEntity<JsonNode> globalResponse = http.getForEntity(
+                url("/api/messages/search/hybrid?query={query}&limit=3"),
+                JsonNode.class,
+                query
+        );
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(new MediaType("text", "plain", StandardCharsets.UTF_8));
+        ResponseEntity<JsonNode> userResponse = http.exchange(
+                url("/api/messages/user/suporte/search/hybrid?limit=3"),
+                HttpMethod.POST,
+                new HttpEntity<>(query, headers),
+                JsonNode.class
+        );
+
+        assertThat(globalResponse.getStatusCode().value()).isEqualTo(200);
+        JsonNode firstResult = globalResponse.getBody().get(0);
+        assertThat(firstResult.path("messageText").asText()).contains("ERR-XPTO-409");
+        assertThat(firstResult.path("vectorRank").isInt()).isTrue();
+        assertThat(firstResult.path("lexicalRank").isInt()).isTrue();
+        assertThat(firstResult.path("vectorSimilarityScore").isNumber()).isTrue();
+        assertThat(firstResult.path("lexicalBm25Score").isNumber()).isTrue();
+
+        int vectorRank = firstResult.path("vectorRank").asInt();
+        int lexicalRank = firstResult.path("lexicalRank").asInt();
+        double expectedRrfScore = 1.0 / (60 + vectorRank) + 1.0 / (60 + lexicalRank);
+        assertThat(firstResult.path("rrfScore").asDouble()).isCloseTo(
+                expectedRrfScore,
+                org.assertj.core.data.Offset.offset(0.0000000001)
+        );
+
+        assertThat(userResponse.getStatusCode().value()).isEqualTo(200);
+        assertThat(userResponse.getBody()).isNotNull();
+        assertThat(userResponse.getBody().get(0).path("userId").asText()).isEqualTo("suporte");
+        assertThat(userResponse.getBody().get(0).path("messageText").asText())
+                .contains("ERR-XPTO-409");
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("Produz sinal híbrido alto quando vetores e FTS5 concordam")
+    @Feature("Qualidade da busca híbrida")
+    @Description("""
+            Pesquisa 'problema ao processar pedido ERR-XPTO-409', que é semanticamente próximo
+            e compartilha termos raros com a mensagem cadastrada. O teste exige rank 1 nas duas
+            fontes, similaridade vetorial maior que 0,75 e RRF acima de 0,03.
+            """)
+    void producesStrongHybridSignalWhenVectorAndLexicalRankingsAgree() {
+        ResponseEntity<JsonNode> response = http.getForEntity(
+                url("/api/messages/search/hybrid?query={query}&limit=3"),
+                JsonNode.class,
+                "problema ao processar pedido ERR-XPTO-409"
+        );
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(response.getBody()).isNotNull();
+        JsonNode firstResult = response.getBody().get(0);
+
+        assertThat(firstResult.path("messageText").asText()).contains("ERR-XPTO-409");
+        assertThat(firstResult.path("vectorRank").asInt()).isEqualTo(1);
+        assertThat(firstResult.path("lexicalRank").asInt()).isEqualTo(1);
+        assertThat(firstResult.path("vectorSimilarityScore").asDouble()).isGreaterThan(0.75);
+        assertThat(firstResult.path("rrfScore").asDouble()).isGreaterThan(0.03);
+    }
+
+    @Test
+    @Order(10)
+    @DisplayName("Produz sinal híbrido baixo para consulta sem relação e sem termos em comum")
+    @Feature("Qualidade da busca híbrida")
+    @Description("""
+            Pesquisa 'culinária sobremesa confeitaria morangos', sem termos presentes na base e
+            sem relação com veículo, software, cobrança ou suporte. Valida ausência de ranking
+            FTS5, similaridade vetorial abaixo de 0,30 e RRF formado somente pelo rank vetorial.
+            """)
+    void producesWeakHybridSignalForUnrelatedQueryWithoutLexicalMatches() {
+        ResponseEntity<JsonNode> response = http.getForEntity(
+                url("/api/messages/search/hybrid?query={query}&limit=3"),
+                JsonNode.class,
+                "culinária sobremesa confeitaria morangos"
+        );
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(response.getBody()).isNotNull();
+        JsonNode firstResult = response.getBody().get(0);
+
+        assertThat(firstResult.path("lexicalRank").isNull()).isTrue();
+        assertThat(firstResult.path("lexicalBm25Score").isNull()).isTrue();
+        assertThat(firstResult.path("vectorSimilarityScore").asDouble()).isLessThan(0.30);
+
+        int vectorRank = firstResult.path("vectorRank").asInt();
+        double expectedVectorOnlyRrf = 1.0 / (60 + vectorRank);
+        assertThat(firstResult.path("rrfScore").asDouble()).isCloseTo(
+                expectedVectorOnlyRrf,
+                org.assertj.core.data.Offset.offset(0.0000000001)
+        );
+    }
+
+    @Test
+    @Order(11)
     @DisplayName("Retorna HTTP 400 para payload e limite inválidos")
+    @Feature("Validação de entrada")
+    @Description("""
+            Envia um POST /api/messages com userId e messageText vazios e uma listagem com
+            limit=101. Valida HTTP 400 nos dois casos e confere se a resposta estruturada contém
+            duas mensagens para o payload e uma mensagem identificando o parâmetro limit.
+            """)
     void returnsBadRequestForInvalidPayloadAndLimit() {
         ResponseEntity<JsonNode> invalidMessage = http.postForEntity(
                 url("/api/messages"),
@@ -159,8 +396,14 @@ class MessageApiIntegrationTest {
     }
 
     @Test
-    @Order(6)
+    @Order(12)
     @DisplayName("Exclui uma mensagem e depois retorna HTTP 404")
+    @Feature("Exclusão de mensagens")
+    @Description("""
+            Executa DELETE /api/messages/{messageId} duas vezes para o mesmo registro.
+            A primeira chamada deve retornar HTTP 204 e remover a mensagem; a segunda deve
+            retornar HTTP 404, comprovando que o registro deixou de existir.
+            """)
     void deletesMessageAndThenReturnsNotFound() {
         ResponseEntity<Void> firstDeletion = http.exchange(
                 url("/api/messages/" + vehicleMessageId),
@@ -180,8 +423,14 @@ class MessageApiIntegrationTest {
     }
 
     @Test
-    @Order(7)
+    @Order(13)
     @DisplayName("Expõe a especificação OpenAPI gerada")
+    @Feature("Documentação da API")
+    @Description("""
+            Chama GET /v3/api-docs contra a aplicação real. Valida HTTP 200, o título da API e
+            a presença dos endpoints de busca global, exclusão e reindexação na especificação
+            OpenAPI gerada automaticamente pelo Springdoc.
+            """)
     void exposesGeneratedOpenApiForRealEndpoints() {
         ResponseEntity<JsonNode> response = http.getForEntity(url("/v3/api-docs"), JsonNode.class);
 
@@ -193,6 +442,10 @@ class MessageApiIntegrationTest {
         assertThat(document.path("paths").has("/api/messages/search")).isTrue();
         assertThat(document.path("paths").has("/api/messages/{messageId}")).isTrue();
         assertThat(document.path("paths").has("/api/messages/reindex")).isTrue();
+        assertThat(document.path("paths").has("/api/messages/search/lexical")).isTrue();
+        assertThat(document.path("paths").has("/api/messages/search/hybrid")).isTrue();
+        assertThat(document.path("paths").has("/api/messages/user/{userId}/search/lexical")).isTrue();
+        assertThat(document.path("paths").has("/api/messages/user/{userId}/search/hybrid")).isTrue();
     }
 
     private JsonNode createMessage(String userId, String messageText) {

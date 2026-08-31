@@ -12,7 +12,7 @@ public class OpenApiConfig {
     OpenAPI embeddingsOpenApi() {
         return new OpenAPI().info(new Info()
                 .title("Embeddings Java SQLite API")
-                .description("API para armazenar mensagens e realizar buscas semânticas com embeddings locais")
+                .description("API para mensagens com busca vetorial, lexical FTS5/BM25 e híbrida RRF")
                 .version("v1"));
     }
 }

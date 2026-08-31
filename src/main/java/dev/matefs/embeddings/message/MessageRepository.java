@@ -9,9 +9,14 @@ import java.nio.FloatBuffer;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Repository
 public class MessageRepository {
+
+    private static final Pattern SEARCH_TOKEN = Pattern.compile("[\\p{L}\\p{N}_]+");
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -34,6 +39,49 @@ public class MessageRepository {
         jdbcTemplate.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_messages_user_id
                 ON user_messages(user_id)
+                """);
+        initializeFullTextSearch();
+    }
+
+    private void initializeFullTextSearch() {
+        jdbcTemplate.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS user_messages_fts USING fts5(
+                    message_id UNINDEXED,
+                    user_id UNINDEXED,
+                    message_text,
+                    tokenize = 'unicode61 remove_diacritics 2'
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER IF NOT EXISTS user_messages_fts_after_insert
+                AFTER INSERT ON user_messages
+                BEGIN
+                    INSERT INTO user_messages_fts(message_id, user_id, message_text)
+                    VALUES (new.message_id, new.user_id, new.message_text);
+                END
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER IF NOT EXISTS user_messages_fts_after_delete
+                AFTER DELETE ON user_messages
+                BEGIN
+                    DELETE FROM user_messages_fts WHERE message_id = old.message_id;
+                END
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER IF NOT EXISTS user_messages_fts_after_update
+                AFTER UPDATE OF user_id, message_text ON user_messages
+                BEGIN
+                    DELETE FROM user_messages_fts WHERE message_id = old.message_id;
+                    INSERT INTO user_messages_fts(message_id, user_id, message_text)
+                    VALUES (new.message_id, new.user_id, new.message_text);
+                END
+                """);
+
+        // Sincroniza registros criados antes da introdução do FTS5.
+        jdbcTemplate.execute("DELETE FROM user_messages_fts");
+        jdbcTemplate.execute("""
+                INSERT INTO user_messages_fts(message_id, user_id, message_text)
+                SELECT message_id, user_id, message_text FROM user_messages
                 """);
     }
 
@@ -74,6 +122,50 @@ public class MessageRepository {
                 "SELECT message_id, user_id, message_text, embedding_blob, embedding_model FROM user_messages",
                 this::mapMessage
         );
+    }
+
+    List<LexicalSearchResponse> searchLexically(String query, String userId, int limit) {
+        String ftsQuery = toFtsQuery(query);
+        if (ftsQuery.isBlank()) {
+            return List.of();
+        }
+
+        String userFilter = userId == null ? "" : " AND m.user_id = ?";
+        String sql = """
+                SELECT m.message_id,
+                       m.user_id,
+                       m.message_text,
+                       length(m.embedding_blob) / 4 AS vector_dimensions,
+                       bm25(user_messages_fts) AS bm25_score
+                FROM user_messages_fts
+                JOIN user_messages m ON m.message_id = user_messages_fts.message_id
+                WHERE user_messages_fts MATCH ?
+                """ + userFilter + " ORDER BY bm25_score ASC LIMIT ?";
+
+        Object[] parameters = userId == null
+                ? new Object[]{ftsQuery, limit}
+                : new Object[]{ftsQuery, userId, limit};
+
+        return jdbcTemplate.query(sql, (resultSet, rowNumber) -> new LexicalSearchResponse(
+                resultSet.getString("message_id"),
+                resultSet.getString("user_id"),
+                resultSet.getString("message_text"),
+                resultSet.getInt("vector_dimensions"),
+                rowNumber + 1,
+                resultSet.getDouble("bm25_score")
+        ), parameters);
+    }
+
+    private String toFtsQuery(String query) {
+        Matcher matcher = SEARCH_TOKEN.matcher(query.toLowerCase(Locale.ROOT));
+        StringBuilder ftsQuery = new StringBuilder();
+        while (matcher.find()) {
+            if (!ftsQuery.isEmpty()) {
+                ftsQuery.append(" OR ");
+            }
+            ftsQuery.append('"').append(matcher.group()).append('"');
+        }
+        return ftsQuery.toString();
     }
 
     void updateEmbedding(String messageId, float[] embedding, String embeddingModel) {

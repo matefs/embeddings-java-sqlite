@@ -72,8 +72,15 @@ tasks.register('integrationTest', Test) {
     useJUnitPlatform()
     shouldRunAfter tasks.named('test')
     outputs.upToDateWhen { false }
+    doFirst {
+        project.delete(layout.buildDirectory.dir('allure-results'))
+    }
 }
 
 tasks.named('check') {
     dependsOn tasks.named('integrationTest')
+}
+
+tasks.named('allureReport') {
+    clean.set(true)
 }

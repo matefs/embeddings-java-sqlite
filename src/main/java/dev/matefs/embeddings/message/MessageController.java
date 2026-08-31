@@ -76,6 +76,44 @@ public class MessageController {
         return service.searchAll(query, limit);
     }
 
+    @PostMapping(value = "/user/{userId}/search/lexical", consumes = "text/plain")
+    @Operation(summary = "Busca lexical com SQLite FTS5 e BM25 para um usuário")
+    List<LexicalSearchResponse> searchLexicallyByUserId(
+            @PathVariable String userId,
+            @RequestBody @NotBlank String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit
+    ) {
+        return service.searchLexicallyByUserId(userId, query, limit);
+    }
+
+    @GetMapping("/search/lexical")
+    @Operation(summary = "Busca lexical global com SQLite FTS5 e BM25")
+    List<LexicalSearchResponse> searchLexicallyAll(
+            @RequestParam @NotBlank String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit
+    ) {
+        return service.searchLexicallyAll(query, limit);
+    }
+
+    @PostMapping(value = "/user/{userId}/search/hybrid", consumes = "text/plain")
+    @Operation(summary = "Busca híbrida por usuário combinando vetores, FTS5, BM25 e RRF")
+    List<HybridSearchResponse> searchHybridByUserId(
+            @PathVariable String userId,
+            @RequestBody @NotBlank String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit
+    ) {
+        return service.searchHybridByUserId(userId, query, limit);
+    }
+
+    @GetMapping("/search/hybrid")
+    @Operation(summary = "Busca híbrida global combinando vetores, FTS5, BM25 e RRF")
+    List<HybridSearchResponse> searchHybridAll(
+            @RequestParam @NotBlank String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit
+    ) {
+        return service.searchHybridAll(query, limit);
+    }
+
     @PostMapping("/reindex")
     @Operation(summary = "Recria todos os embeddings com o modelo atual")
     ReindexResponse reindex() {
